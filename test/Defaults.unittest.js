@@ -1,10 +1,8 @@
 const path = require("path");
-const jestDiff = require("jest-diff").default;
+const jestDiff = require("jest-diff").diff;
 const stripAnsi = require("strip-ansi");
-const {
-	applyWebpackOptionsDefaults,
-	getNormalizedWebpackOptions
-} = require("..").config;
+const { applyWebpackOptionsDefaults, getNormalizedWebpackOptions } =
+	require("..").config;
 
 /**
  * Escapes regular expression metacharacters
@@ -181,7 +179,15 @@ describe("Defaults", () => {
 		      },
 		      Object {
 		        "dependency": "url",
-		        "type": "asset/resource",
+		        "oneOf": Array [
+		          Object {
+		            "scheme": /\\^data\\$/,
+		            "type": "asset/inline",
+		          },
+		          Object {
+		            "type": "asset/resource",
+		          },
+		        ],
 		      },
 		    ],
 		    "generator": Object {},
@@ -326,6 +332,7 @@ describe("Defaults", () => {
 		    "sourceMapFilename": "[file].map[query]",
 		    "sourcePrefix": undefined,
 		    "strictModuleExceptionHandling": false,
+		    "trustedTypes": undefined,
 		    "uniqueName": "webpack",
 		    "wasmLoading": "fetch",
 		    "webassemblyModuleFilename": "[hash].module.wasm",
@@ -810,6 +817,8 @@ describe("Defaults", () => {
 		-     "syncWebAssembly": false,
 		+     "syncWebAssembly": true,
 		@@ ... @@
+		+           },
+		+         ],
 		+       },
 		+       Object {
 		+         "rules": Array [
@@ -834,9 +843,9 @@ describe("Defaults", () => {
 		+             },
 		+             "resolve": Object {
 		+               "fullySpecified": true,
-		+             },
+		@@ ... @@
 		+           },
-		+         ],
+		@@ ... @@
 		+         "type": "webassembly/sync",
 	`)
 	);
@@ -851,6 +860,15 @@ describe("Defaults", () => {
 		@@ ... @@
 		-   "externalsType": "var",
 		+   "externalsType": "module",
+		@@ ... @@
+		-     "chunkFilename": "[name].js",
+		+     "chunkFilename": "[name].mjs",
+		@@ ... @@
+		-     "filename": "[name].js",
+		+     "filename": "[name].mjs",
+		@@ ... @@
+		-     "hotUpdateChunkFilename": "[id].[fullhash].hot-update.js",
+		+     "hotUpdateChunkFilename": "[id].[fullhash].hot-update.mjs",
 		@@ ... @@
 		-     "iife": true,
 		+     "iife": false,
@@ -871,6 +889,8 @@ describe("Defaults", () => {
 		-     "asyncWebAssembly": false,
 		+     "asyncWebAssembly": true,
 		@@ ... @@
+		+           },
+		+         ],
 		+       },
 		+       Object {
 		+         "rules": Array [
@@ -895,9 +915,9 @@ describe("Defaults", () => {
 		+             },
 		+             "resolve": Object {
 		+               "fullySpecified": true,
-		+             },
+		@@ ... @@
 		+           },
-		+         ],
+		@@ ... @@
 		+         "type": "webassembly/async",
 	`)
 	);
@@ -916,6 +936,8 @@ describe("Defaults", () => {
 			-     "syncWebAssembly": false,
 			+     "syncWebAssembly": true,
 			@@ ... @@
+			+           },
+			+         ],
 			+       },
 			+       Object {
 			+         "rules": Array [
@@ -930,7 +952,7 @@ describe("Defaults", () => {
 			+         ],
 			+         "test": /\\.wasm$/i,
 			+         "type": "webassembly/async",
-			+       },
+			@@ ... @@
 			+       Object {
 			+         "mimetype": "application/wasm",
 			+         "rules": Array [
@@ -942,7 +964,7 @@ describe("Defaults", () => {
 			+               "fullySpecified": true,
 			+             },
 			+           },
-			+         ],
+			@@ ... @@
 			+         "type": "webassembly/async",
 		`)
 	);
@@ -1636,7 +1658,8 @@ describe("Defaults", () => {
 		"uniqueName",
 		{
 			output: {
-				uniqueName: "@@@Hello World!"
+				uniqueName: "@@@Hello World!",
+				trustedTypes: true
 			}
 		},
 		e =>
@@ -1654,7 +1677,11 @@ describe("Defaults", () => {
 			-     "hotUpdateGlobal": "webpackHotUpdatewebpack",
 			+     "hotUpdateGlobal": "webpackHotUpdate_Hello_World_",
 			@@ ... @@
+			-     "trustedTypes": undefined,
 			-     "uniqueName": "webpack",
+			+     "trustedTypes": Object {
+			+       "policyName": "@@@Hello_World_",
+			+     },
 			+     "uniqueName": "@@@Hello World!",
 		`)
 	);

@@ -3,7 +3,7 @@
 const path = require("path");
 const fs = require("graceful-fs");
 const vm = require("vm");
-const { URL } = require("url");
+const { URL, pathToFileURL } = require("url");
 const rimraf = require("rimraf");
 const webpack = require("..");
 const TerserPlugin = require("terser-webpack-plugin");
@@ -16,6 +16,7 @@ const CurrentScript = require("./helpers/CurrentScript");
 const prepareOptions = require("./helpers/prepareOptions");
 const { parseResource } = require("../lib/util/identifier");
 const captureStdio = require("./helpers/captureStdio");
+const asModule = require("./helpers/asModule");
 
 const casesPath = path.join(__dirname, "configCases");
 const categories = fs.readdirSync(casesPath).map(cat => {
@@ -84,7 +85,12 @@ const describeCases = config => {
 								if (typeof options.output.pathinfo === "undefined")
 									options.output.pathinfo = true;
 								if (!options.output.filename)
-									options.output.filename = "bundle" + idx + ".js";
+									options.output.filename =
+										"bundle" +
+										idx +
+										(options.experiments && options.experiments.outputModule
+											? ".mjs"
+											: ".js");
 								if (config.cache) {
 									options.cache = {
 										cacheDirectory,
@@ -295,7 +301,12 @@ const describeCases = config => {
 
 										const requireCache = Object.create(null);
 										// eslint-disable-next-line no-loop-func
-										const _require = (currentDirectory, options, module) => {
+										const _require = (
+											currentDirectory,
+											options,
+											module,
+											esmMode
+										) => {
 											if (Array.isArray(module) || /^\.\.?\//.test(module)) {
 												let content;
 												let p;
@@ -339,35 +350,13 @@ const describeCases = config => {
 												};
 												requireCache[p] = m;
 												let runInNewContext = false;
-												let oldCurrentScript = document.currentScript;
-												document.currentScript = new CurrentScript(subPath);
 
 												const moduleScope = {
-													require: _require.bind(
-														null,
-														path.dirname(p),
-														options
-													),
-													importScripts: url => {
-														expect(url).toMatch(
-															/^https:\/\/test\.cases\/path\//
-														);
-														_require(
-															outputDirectory,
-															options,
-															`.${url.slice("https://test.cases/path".length)}`
-														);
-													},
-													module: m,
-													exports: m.exports,
-													__dirname: path.dirname(p),
-													__filename: p,
 													it: _it,
 													beforeEach: _beforeEach,
 													afterEach: _afterEach,
 													expect,
 													jest,
-													_globalAssign: { expect },
 													__STATS__: jsonStats,
 													nsObj: m => {
 														Object.defineProperty(m, Symbol.toStringTag, {
@@ -376,6 +365,36 @@ const describeCases = config => {
 														return m;
 													}
 												};
+												const isModule =
+													p.endsWith(".mjs") &&
+													options.experiments &&
+													options.experiments.outputModule;
+												if (!isModule) {
+													Object.assign(moduleScope, {
+														require: _require.bind(
+															null,
+															path.dirname(p),
+															options
+														),
+														importScripts: url => {
+															expect(url).toMatch(
+																/^https:\/\/test\.cases\/path\//
+															);
+															_require(
+																outputDirectory,
+																options,
+																`.${url.slice(
+																	"https://test.cases/path".length
+																)}`
+															);
+														},
+														module: m,
+														exports: m.exports,
+														__dirname: path.dirname(p),
+														__filename: p,
+														_globalAssign: { expect }
+													});
+												}
 												if (
 													options.target === "web" ||
 													options.target === "webworker"
@@ -383,41 +402,111 @@ const describeCases = config => {
 													moduleScope.window = globalContext;
 													moduleScope.self = globalContext;
 													moduleScope.URL = URL;
-													moduleScope.Worker = require("./helpers/createFakeWorker")(
-														{ outputDirectory }
-													);
+													moduleScope.Worker =
+														require("./helpers/createFakeWorker")({
+															outputDirectory
+														});
 													runInNewContext = true;
 												}
 												if (testConfig.moduleScope) {
 													testConfig.moduleScope(moduleScope);
 												}
-												const args = Object.keys(moduleScope);
-												const argValues = args.map(arg => moduleScope[arg]);
-												if (!runInNewContext)
-													content = `Object.assign(global, _globalAssign); ${content}`;
-												const code = `(function(${args.join(
-													", "
-												)}) {${content}\n})`;
-												const fn = runInNewContext
-													? vm.runInNewContext(code, globalContext, p)
-													: vm.runInThisContext(code, p);
-												fn.call(m.exports, ...argValues);
+												if (isModule) {
+													if (!vm.SourceTextModule)
+														throw new Error(
+															"Running this test requires '--experimental-vm-modules'.\nRun with 'node --experimental-vm-modules node_modules/jest-cli/bin/jest'."
+														);
+													const esm = new vm.SourceTextModule(content, {
+														identifier: p,
+														context: vm.createContext(moduleScope, {
+															name: `context for ${p}`
+														}),
+														initializeImportMeta: (meta, module) => {
+															meta.url = pathToFileURL(p).href;
+														},
+														importModuleDynamically: async (
+															specifier,
+															module
+														) => {
+															const result = await _require(
+																path.dirname(p),
+																options,
+																specifier,
+																"evaluated"
+															);
+															return await asModule(result, module.context);
+														}
+													});
+													if (esmMode === "unlinked") return esm;
+													return (async () => {
+														await esm.link(
+															async (specifier, referencingModule) => {
+																return await asModule(
+																	await _require(
+																		path.dirname(referencingModule.identfier),
+																		options,
+																		specifier,
+																		"unlinked"
+																	),
+																	module.context,
+																	true
+																);
+															}
+														);
+														// node.js 10 needs instantiate
+														if (esm.instantiate) esm.instantiate();
+														await esm.evaluate();
+														if (esmMode === "evaluated") return esm;
+														const ns = esm.namespace;
+														return ns.default && ns.default instanceof Promise
+															? ns.default
+															: ns;
+													})();
+												} else {
+													if (!runInNewContext)
+														content = `Object.assign(global, _globalAssign); ${content}`;
+													const args = Object.keys(moduleScope);
+													const argValues = args.map(arg => moduleScope[arg]);
+													const code = `(function(${args.join(
+														", "
+													)}) {${content}\n})`;
 
-												//restore state
-												document.currentScript = oldCurrentScript;
-
+													let oldCurrentScript = document.currentScript;
+													document.currentScript = new CurrentScript(subPath);
+													const fn = runInNewContext
+														? vm.runInNewContext(code, globalContext, p)
+														: vm.runInThisContext(code, p);
+													fn.call(m.exports, ...argValues);
+													document.currentScript = oldCurrentScript;
+												}
 												return m.exports;
 											} else if (
 												testConfig.modules &&
 												module in testConfig.modules
 											) {
 												return testConfig.modules[module];
-											} else return require(module);
+											} else {
+												return require(module.startsWith("node:")
+													? module.slice(5)
+													: module);
+											}
 										};
 
-										results.push(
-											_require(outputDirectory, optionsArr[i], bundlePath)
-										);
+										if (Array.isArray(bundlePath)) {
+											for (const bundlePathItem of bundlePath) {
+												results.push(
+													_require(
+														outputDirectory,
+														optionsArr[i],
+														"./" + bundlePathItem
+													)
+												);
+											}
+										} else {
+											results.push(
+												_require(outputDirectory, optionsArr[i], bundlePath)
+											);
+										}
 									}
 								}
 								// give a free pass to compilation that generated an error
